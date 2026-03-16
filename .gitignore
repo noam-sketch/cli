@@ -9,6 +9,7 @@ cli_test
 # Debian packaging artifacts
 deb_build/
 *.deb
+!releases/*.deb
 
 # Editor/OS files
 .DS_Store
