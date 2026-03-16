@@ -1,0 +1,20 @@
+# Build artifacts
+cli
+cli_test
+*.o
+*.gcda
+*.gcno
+*.gcov
+
+# Debian packaging artifacts
+deb_build/
+*.deb
+
+# Editor/OS files
+.DS_Store
+.vscode/
+.idea/
+*~
+
+# State files
+state.txt

@@ -1,0 +1,38 @@
+name: cli
+description: "A new Flutter project."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  xterm: ^4.0.0
+  flutter_pty: ^0.4.2
+  multi_split_view: ^3.6.1
+  window_manager: ^0.5.1
+  bidi: ^2.0.13
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
+
+flutter_launcher_icons:
+  linux:
+    generate: true
+    image_path: "assets/icon.png"
+  image_path: "assets/icon.png"
+
+flutter:
+  uses-material-design: true
+
+  fonts:
+    - family: UbuntuMono
+      fonts:
+        - asset: assets/fonts/UbuntuMono-Regular.ttf
