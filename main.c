@@ -13,8 +13,17 @@ static GtkWidget *root_box = NULL;
 
 static void split_terminal(GtkWidget *widget, int direction, const char *cwd);
 static void close_terminal(GtkWidget *term);
-static GtkWidget* create_terminal_widget(const char *working_directory);
+static GtkWidget* create_terminal_widget(const char *working_directory, int theme_index);
 static void save_state();
+
+// Helper to find VTE inside our panel structure
+static GtkWidget* get_vte_from_panel(GtkWidget *panel) {
+    if (VTE_IS_TERMINAL(panel)) return panel;
+    if (GTK_IS_OVERLAY(panel)) {
+        return GTK_WIDGET(g_object_get_data(G_OBJECT(panel), "vte-terminal"));
+    }
+    return NULL;
+}
 
 // Data structures for themes
 typedef struct {
@@ -85,35 +94,6 @@ static TerminalTheme themes[] = {
 
 static int current_theme_index = 4; // Default Dark
 
-static void apply_theme_to_terminal(GtkWidget *widget, gpointer user_data) {
-    if (VTE_IS_TERMINAL(widget)) {
-        TerminalTheme *t = (TerminalTheme*)user_data;
-        vte_terminal_set_colors(VTE_TERMINAL(widget), &t->fg, &t->bg, t->palette, 16);
-    } else if (GTK_IS_CONTAINER(widget)) {
-        gtk_container_foreach(GTK_CONTAINER(widget), apply_theme_to_terminal, user_data);
-    }
-}
-
-static void on_theme_selected(GtkMenuItem *item, gpointer user_data) {
-    int index = GPOINTER_TO_INT(user_data);
-    current_theme_index = index;
-    apply_theme_to_terminal(root_box, &themes[index]);
-}
-
-static void show_theme_menu(GtkWidget *widget, gpointer user_data) {
-    GtkWidget *menu = gtk_menu_new();
-    
-    int num_themes = sizeof(themes) / sizeof(themes[0]);
-    for (int i = 0; i < num_themes; i++) {
-        GtkWidget *item = gtk_menu_item_new_with_label(themes[i].name);
-        g_signal_connect(item, "activate", G_CALLBACK(on_theme_selected), GINT_TO_POINTER(i));
-        gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
-    }
-    
-    gtk_widget_show_all(menu);
-    gtk_menu_popup_at_widget(GTK_MENU(menu), widget, GDK_GRAVITY_SOUTH_EAST, GDK_GRAVITY_NORTH_EAST, NULL);
-}
-
 static void apply_custom_css() {
     GtkCssProvider *provider = gtk_css_provider_new();
     const gchar *css =
@@ -144,34 +124,39 @@ static void load_custom_font() {
 }
 
 static void on_term_child_exited(VteTerminal *term, gint status, gpointer user_data) {
-    close_terminal(GTK_WIDGET(term));
+    GtkWidget *overlay = GTK_WIDGET(g_object_get_data(G_OBJECT(term), "panel-overlay"));
+    close_terminal(overlay);
 }
 
 static void on_copy(GtkMenuItem *item, gpointer user_data) {
-    VteTerminal *term = VTE_TERMINAL(user_data);
-    vte_terminal_copy_clipboard_format(term, VTE_FORMAT_TEXT);
+    GtkWidget *overlay = GTK_WIDGET(user_data);
+    GtkWidget *term = get_vte_from_panel(overlay);
+    vte_terminal_copy_clipboard_format(VTE_TERMINAL(term), VTE_FORMAT_TEXT);
 }
 
 static void on_paste(GtkMenuItem *item, gpointer user_data) {
-    VteTerminal *term = VTE_TERMINAL(user_data);
-    vte_terminal_paste_clipboard(term);
+    GtkWidget *overlay = GTK_WIDGET(user_data);
+    GtkWidget *term = get_vte_from_panel(overlay);
+    vte_terminal_paste_clipboard(VTE_TERMINAL(term));
 }
 
 static void on_split_h(GtkMenuItem *item, gpointer user_data) {
-    VteTerminal *term = VTE_TERMINAL(user_data);
-    const char *uri = vte_terminal_get_current_directory_uri(term);
+    GtkWidget *overlay = GTK_WIDGET(user_data);
+    GtkWidget *term = get_vte_from_panel(overlay);
+    const char *uri = vte_terminal_get_current_directory_uri(VTE_TERMINAL(term));
     char *cwd = NULL;
     if (uri) cwd = g_filename_from_uri(uri, NULL, NULL);
-    split_terminal(GTK_WIDGET(term), 0, cwd);
+    split_terminal(overlay, 0, cwd);
     g_free(cwd);
 }
 
 static void on_split_v(GtkMenuItem *item, gpointer user_data) {
-    VteTerminal *term = VTE_TERMINAL(user_data);
-    const char *uri = vte_terminal_get_current_directory_uri(term);
+    GtkWidget *overlay = GTK_WIDGET(user_data);
+    GtkWidget *term = get_vte_from_panel(overlay);
+    const char *uri = vte_terminal_get_current_directory_uri(VTE_TERMINAL(term));
     char *cwd = NULL;
     if (uri) cwd = g_filename_from_uri(uri, NULL, NULL);
-    split_terminal(GTK_WIDGET(term), 1, cwd);
+    split_terminal(overlay, 1, cwd);
     g_free(cwd);
 }
 
@@ -181,30 +166,31 @@ static void on_close_action(GtkMenuItem *item, gpointer user_data) {
 
 static gboolean on_button_press(GtkWidget *widget, GdkEventButton *event, gpointer user_data) {
     if (event->type == GDK_BUTTON_PRESS && event->button == 3) {
+        GtkWidget *overlay = GTK_WIDGET(g_object_get_data(G_OBJECT(widget), "panel-overlay"));
         GtkWidget *menu = gtk_menu_new();
 
         GtkWidget *item_copy = gtk_menu_item_new_with_label("Copy");
-        g_signal_connect(item_copy, "activate", G_CALLBACK(on_copy), widget);
+        g_signal_connect(item_copy, "activate", G_CALLBACK(on_copy), overlay);
         gtk_menu_shell_append(GTK_MENU_SHELL(menu), item_copy);
 
         GtkWidget *item_paste = gtk_menu_item_new_with_label("Paste");
-        g_signal_connect(item_paste, "activate", G_CALLBACK(on_paste), widget);
+        g_signal_connect(item_paste, "activate", G_CALLBACK(on_paste), overlay);
         gtk_menu_shell_append(GTK_MENU_SHELL(menu), item_paste);
 
         gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
 
         GtkWidget *item_split_h = gtk_menu_item_new_with_label("Split Horizontally");
-        g_signal_connect(item_split_h, "activate", G_CALLBACK(on_split_h), widget);
+        g_signal_connect(item_split_h, "activate", G_CALLBACK(on_split_h), overlay);
         gtk_menu_shell_append(GTK_MENU_SHELL(menu), item_split_h);
 
         GtkWidget *item_split_v = gtk_menu_item_new_with_label("Split Vertically");
-        g_signal_connect(item_split_v, "activate", G_CALLBACK(on_split_v), widget);
+        g_signal_connect(item_split_v, "activate", G_CALLBACK(on_split_v), overlay);
         gtk_menu_shell_append(GTK_MENU_SHELL(menu), item_split_v);
 
         gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
 
         GtkWidget *item_close = gtk_menu_item_new_with_label("Close Terminal Panel");
-        g_signal_connect(item_close, "activate", G_CALLBACK(on_close_action), widget);
+        g_signal_connect(item_close, "activate", G_CALLBACK(on_close_action), overlay);
         gtk_menu_shell_append(GTK_MENU_SHELL(menu), item_close);
 
         gtk_widget_show_all(menu);
@@ -214,7 +200,36 @@ static gboolean on_button_press(GtkWidget *widget, GdkEventButton *event, gpoint
     return FALSE;
 }
 
-static GtkWidget* create_terminal_widget(const char *working_directory) {
+static void on_panel_theme_selected(GtkMenuItem *item, gpointer user_data) {
+    GtkWidget *overlay = GTK_WIDGET(user_data);
+    int index = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), "theme-index"));
+    
+    g_object_set_data(G_OBJECT(overlay), "theme-index", GINT_TO_POINTER(index));
+    
+    GtkWidget *term = get_vte_from_panel(overlay);
+    if (term) {
+        TerminalTheme *t = &themes[index];
+        vte_terminal_set_colors(VTE_TERMINAL(term), &t->fg, &t->bg, t->palette, 16);
+    }
+}
+
+static void show_panel_theme_menu(GtkWidget *widget, gpointer user_data) {
+    GtkWidget *overlay = GTK_WIDGET(user_data);
+    GtkWidget *menu = gtk_menu_new();
+    
+    int num_themes = sizeof(themes) / sizeof(themes[0]);
+    for (int i = 0; i < num_themes; i++) {
+        GtkWidget *item = gtk_menu_item_new_with_label(themes[i].name);
+        g_object_set_data(G_OBJECT(item), "theme-index", GINT_TO_POINTER(i));
+        g_signal_connect(item, "activate", G_CALLBACK(on_panel_theme_selected), overlay);
+        gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+    }
+    
+    gtk_widget_show_all(menu);
+    gtk_menu_popup_at_widget(GTK_MENU(menu), widget, GDK_GRAVITY_SOUTH_EAST, GDK_GRAVITY_NORTH_EAST, NULL);
+}
+
+static GtkWidget* create_terminal_widget(const char *working_directory, int theme_index) {
     GtkWidget *term = vte_terminal_new();
     
     // Set font
@@ -222,8 +237,14 @@ static GtkWidget* create_terminal_widget(const char *working_directory) {
     vte_terminal_set_font(VTE_TERMINAL(term), font_desc);
     pango_font_description_free(font_desc);
 
+    // Ensure theme index is valid
+    int num_themes = sizeof(themes) / sizeof(themes[0]);
+    if (theme_index < 0 || theme_index >= num_themes) {
+        theme_index = current_theme_index;
+    }
+
     // Setup colors from current theme
-    TerminalTheme *t = &themes[current_theme_index];
+    TerminalTheme *t = &themes[theme_index];
     vte_terminal_set_colors(VTE_TERMINAL(term), &t->fg, &t->bg, t->palette, 16);
     
     // Allow terminal to shrink freely
@@ -231,6 +252,27 @@ static GtkWidget* create_terminal_widget(const char *working_directory) {
     gtk_widget_set_vexpand(term, TRUE);
     gtk_widget_set_hexpand(term, TRUE);
     
+    // Create overlay to hold terminal and theme button
+    GtkWidget *overlay = gtk_overlay_new();
+    gtk_container_add(GTK_CONTAINER(overlay), term);
+
+    // Theme selector button
+    GtkWidget *theme_btn = gtk_button_new_with_label("🎨");
+    gtk_style_context_add_class(gtk_widget_get_style_context(theme_btn), "flat");
+    gtk_widget_set_halign(theme_btn, GTK_ALIGN_END);
+    gtk_widget_set_valign(theme_btn, GTK_ALIGN_START);
+    gtk_widget_set_margin_top(theme_btn, 4);
+    gtk_widget_set_margin_end(theme_btn, 4);
+    gtk_widget_set_tooltip_text(theme_btn, "Change Panel Theme");
+    
+    gtk_overlay_add_overlay(GTK_OVERLAY(overlay), theme_btn);
+    g_signal_connect(theme_btn, "clicked", G_CALLBACK(show_panel_theme_menu), overlay);
+
+    // Data linkage
+    g_object_set_data(G_OBJECT(overlay), "vte-terminal", term);
+    g_object_set_data(G_OBJECT(overlay), "theme-index", GINT_TO_POINTER(theme_index));
+    g_object_set_data(G_OBJECT(term), "panel-overlay", overlay);
+
     // Setup mouse events
     vte_terminal_set_mouse_autohide(VTE_TERMINAL(term), TRUE);
     g_signal_connect(term, "button-press-event", G_CALLBACK(on_button_press), NULL);
@@ -259,7 +301,7 @@ static GtkWidget* create_terminal_widget(const char *working_directory) {
     );
 
     g_strfreev(command);
-    return term;
+    return overlay;
 }
 
 static void split_terminal(GtkWidget *widget, int direction, const char *cwd) {
@@ -269,7 +311,8 @@ static void split_terminal(GtkWidget *widget, int direction, const char *cwd) {
     GtkAllocation alloc;
     gtk_widget_get_allocation(widget, &alloc);
 
-    GtkWidget *new_term = create_terminal_widget(cwd);
+    int theme_idx = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(widget), "theme-index"));
+    GtkWidget *new_term = create_terminal_widget(cwd, theme_idx);
     
     // direction 0 = horiz (side by side), 1 = vert (top and bottom)
     GtkWidget *paned = direction == 0 ? gtk_paned_new(GTK_ORIENTATION_HORIZONTAL) : gtk_paned_new(GTK_ORIENTATION_VERTICAL);
@@ -346,11 +389,13 @@ static void close_terminal(GtkWidget *term) {
 }
 
 static void write_widget_state(GtkWidget *widget, FILE *f) {
-    if (VTE_IS_TERMINAL(widget)) {
-        const char *uri = vte_terminal_get_current_directory_uri(VTE_TERMINAL(widget));
+    if (GTK_IS_OVERLAY(widget)) {
+        GtkWidget *term = get_vte_from_panel(widget);
+        int theme_index = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(widget), "theme-index"));
+        const char *uri = vte_terminal_get_current_directory_uri(VTE_TERMINAL(term));
         char *cwd = NULL;
         if (uri) cwd = g_filename_from_uri(uri, NULL, NULL);
-        fprintf(f, "TERM %s\n", cwd ? cwd : "");
+        fprintf(f, "TERM %d %s\n", theme_index, cwd ? cwd : "");
         g_free(cwd);
     } else if (GTK_IS_PANED(widget)) {
         GtkOrientation orient = gtk_orientable_get_orientation(GTK_ORIENTABLE(widget));
@@ -367,12 +412,15 @@ static GtkWidget* read_widget_state(FILE *f) {
     if (!fgets(line, sizeof(line), f)) return NULL;
 
     if (strncmp(line, "TERM", 4) == 0) {
+        int theme_idx = current_theme_index;
         char cwd[1024] = {0};
-        if (strlen(line) > 5) {
-            strcpy(cwd, line + 5);
+        if (sscanf(line + 5, "%d %[^\n]", &theme_idx, cwd) < 1) {
+            // Fallback to old format: TERM <cwd>
+            strncpy(cwd, line + 5, sizeof(cwd) - 1);
             cwd[strcspn(cwd, "\n")] = 0;
+            theme_idx = current_theme_index;
         }
-        return create_terminal_widget(cwd[0] ? cwd : NULL);
+        return create_terminal_widget(cwd[0] ? cwd : NULL, theme_idx);
     } else if (strncmp(line, "PANED", 5) == 0) {
         int orient = atoi(line + 6);
         GtkWidget *paned = gtk_paned_new(orient);
@@ -408,10 +456,12 @@ static void save_state() {
 
 static void load_state() {
     char path[512];
+    snprintf(path, sizeof(path), "%s/.config/cli", g_get_home_dir());
+    g_mkdir_with_parents(path, 0755);
     snprintf(path, sizeof(path), "%s/.config/cli/state.txt", g_get_home_dir());
     FILE *f = fopen(path, "r");
     if (!f) {
-        GtkWidget *initial_term = create_terminal_widget(NULL);
+        GtkWidget *initial_term = create_terminal_widget(NULL, current_theme_index);
         gtk_box_pack_start(GTK_BOX(root_box), initial_term, TRUE, TRUE, 0);
         return;
     }
@@ -433,7 +483,7 @@ static void load_state() {
     if (root_widget) {
         gtk_box_pack_start(GTK_BOX(root_box), root_widget, TRUE, TRUE, 0);
     } else {
-        GtkWidget *initial_term = create_terminal_widget(NULL);
+        GtkWidget *initial_term = create_terminal_widget(NULL, current_theme_index);
         gtk_box_pack_start(GTK_BOX(root_box), initial_term, TRUE, TRUE, 0);
     }
 }
@@ -531,12 +581,6 @@ int main(int argc, char *argv[]) {
         }
         g_object_unref(icon);
     }
-    
-    // Theme button
-    GtkWidget *theme_btn = gtk_button_new_with_label("Themes 🎨");
-    gtk_widget_set_tooltip_text(theme_btn, "Change Terminal Theme");
-    g_signal_connect(theme_btn, "clicked", G_CALLBACK(show_theme_menu), NULL);
-    gtk_header_bar_pack_end(GTK_HEADER_BAR(header), theme_btn);
     
     gtk_window_set_titlebar(GTK_WINDOW(main_window), header);
 

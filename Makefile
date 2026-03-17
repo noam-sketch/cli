@@ -9,7 +9,7 @@ cli: main.c
 
 test: cli_test
 	./cli_test
-	gcov main.c
+	gcov tests/test_main.c
 
 cli_test: main.c tests/test_main.c
 	# Compile test_main which includes main.c

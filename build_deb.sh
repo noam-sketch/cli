@@ -6,9 +6,12 @@ make clean
 make
 
 # Setup variables
-VERSION="1.0.1"
+VERSION="1.0.2"
 APP_NAME="cli"
 DEB_DIR="deb_build"
+RELEASES_DIR="releases"
+
+mkdir -p ${RELEASES_DIR}
 
 echo "Creating debian package structure..."
 rm -rf ${DEB_DIR}
@@ -67,6 +70,6 @@ chmod -R 755 ${DEB_DIR}/usr
 
 # Build package
 dpkg-deb --build ${DEB_DIR}
-mv ${DEB_DIR}.deb ${APP_NAME}_${VERSION}_amd64.deb
+mv ${DEB_DIR}.deb ${RELEASES_DIR}/${APP_NAME}_${VERSION}_amd64.deb
 
-echo "Done! Package generated: ${APP_NAME}_${VERSION}_amd64.deb"
+echo "Done! Package generated: ${RELEASES_DIR}/${APP_NAME}_${VERSION}_amd64.deb"
