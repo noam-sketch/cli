@@ -6,7 +6,7 @@ make clean
 make
 
 # Setup variables
-VERSION="1.0.0"
+VERSION="1.0.1"
 APP_NAME="cli"
 DEB_DIR="deb_build"
 

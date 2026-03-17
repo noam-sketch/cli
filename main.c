@@ -3,6 +3,10 @@
 #include <fontconfig/fontconfig.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
+#include <execinfo.h>
+#include <unistd.h>
+#include <time.h>
 
 static GtkWidget *main_window = NULL;
 static GtkWidget *root_box = NULL;
@@ -222,6 +226,11 @@ static GtkWidget* create_terminal_widget(const char *working_directory) {
     TerminalTheme *t = &themes[current_theme_index];
     vte_terminal_set_colors(VTE_TERMINAL(term), &t->fg, &t->bg, t->palette, 16);
     
+    // Allow terminal to shrink freely
+    gtk_widget_set_size_request(term, 1, 1);
+    gtk_widget_set_vexpand(term, TRUE);
+    gtk_widget_set_hexpand(term, TRUE);
+    
     // Setup mouse events
     vte_terminal_set_mouse_autohide(VTE_TERMINAL(term), TRUE);
     g_signal_connect(term, "button-press-event", G_CALLBACK(on_button_press), NULL);
@@ -255,11 +264,25 @@ static GtkWidget* create_terminal_widget(const char *working_directory) {
 
 static void split_terminal(GtkWidget *widget, int direction, const char *cwd) {
     GtkWidget *parent = gtk_widget_get_parent(widget);
+    
+    // Get the current allocation of the widget we are splitting
+    GtkAllocation alloc;
+    gtk_widget_get_allocation(widget, &alloc);
+
     GtkWidget *new_term = create_terminal_widget(cwd);
     
     // direction 0 = horiz (side by side), 1 = vert (top and bottom)
     GtkWidget *paned = direction == 0 ? gtk_paned_new(GTK_ORIENTATION_HORIZONTAL) : gtk_paned_new(GTK_ORIENTATION_VERTICAL);
     gtk_paned_set_wide_handle(GTK_PANED(paned), TRUE);
+    gtk_widget_set_hexpand(paned, TRUE);
+    gtk_widget_set_vexpand(paned, TRUE);
+    
+    // Set position to 50% of the current size
+    if (direction == 0) {
+        gtk_paned_set_position(GTK_PANED(paned), alloc.width / 2);
+    } else {
+        gtk_paned_set_position(GTK_PANED(paned), alloc.height / 2);
+    }
     
     // To retain the sizing nicely
     g_object_ref(widget);
@@ -268,8 +291,8 @@ static void split_terminal(GtkWidget *widget, int direction, const char *cwd) {
         gtk_container_remove(GTK_CONTAINER(parent), widget);
     }
     
-    gtk_paned_pack1(GTK_PANED(paned), widget, TRUE, FALSE);
-    gtk_paned_pack2(GTK_PANED(paned), new_term, TRUE, FALSE);
+    gtk_paned_pack1(GTK_PANED(paned), widget, TRUE, TRUE);
+    gtk_paned_pack2(GTK_PANED(paned), new_term, TRUE, TRUE);
     
     if (GTK_IS_CONTAINER(parent)) {
         gtk_container_add(GTK_CONTAINER(parent), paned);
@@ -305,10 +328,10 @@ static void close_terminal(GtkWidget *term) {
                 // If the parent was packed as child1 or child2
                 if (gtk_paned_get_child1(GTK_PANED(grandparent)) == parent) {
                     gtk_container_remove(GTK_CONTAINER(grandparent), parent);
-                    gtk_paned_pack1(GTK_PANED(grandparent), other_child, TRUE, FALSE);
+                    gtk_paned_pack1(GTK_PANED(grandparent), other_child, TRUE, TRUE);
                 } else {
                     gtk_container_remove(GTK_CONTAINER(grandparent), parent);
-                    gtk_paned_pack2(GTK_PANED(grandparent), other_child, TRUE, FALSE);
+                    gtk_paned_pack2(GTK_PANED(grandparent), other_child, TRUE, TRUE);
                 }
             } else if (GTK_IS_CONTAINER(grandparent)) {
                 gtk_container_remove(GTK_CONTAINER(grandparent), parent);
@@ -358,8 +381,8 @@ static GtkWidget* read_widget_state(FILE *f) {
         GtkWidget *child1 = read_widget_state(f);
         GtkWidget *child2 = read_widget_state(f);
         
-        if (child1) gtk_paned_pack1(GTK_PANED(paned), child1, TRUE, FALSE);
-        if (child2) gtk_paned_pack2(GTK_PANED(paned), child2, TRUE, FALSE);
+        if (child1) gtk_paned_pack1(GTK_PANED(paned), child1, TRUE, TRUE);
+        if (child2) gtk_paned_pack2(GTK_PANED(paned), child2, TRUE, TRUE);
         return paned;
     }
     return NULL;
@@ -433,7 +456,47 @@ static void grab_first_terminal_focus(GtkWidget *widget, gpointer user_data) {
 }
 
 #ifndef TEST_MODE
+
+static void crash_handler(int sig) {
+    void *array[20];
+    size_t size;
+    char path[512];
+    snprintf(path, sizeof(path), "%s/.config/cli/crash.log", g_get_home_dir());
+    
+    FILE *f = fopen(path, "a");
+    if (f) {
+        time_t now;
+        time(&now);
+        fprintf(f, "\n--- CRASH LOG ---\n");
+        fprintf(f, "Time: %s", ctime(&now));
+        fprintf(f, "Signal: %d\n", sig);
+        
+        size = backtrace(array, 20);
+        char **strings = backtrace_symbols(array, size);
+        if (strings) {
+            for (size_t i = 0; i < size; i++) {
+                fprintf(f, "%s\n", strings[i]);
+            }
+            free(strings);
+        }
+        fclose(f);
+    }
+    
+    // reset handler and raise again to ensure standard crash behavior
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+static void setup_crash_handler() {
+    signal(SIGSEGV, crash_handler);
+    signal(SIGABRT, crash_handler);
+    signal(SIGFPE, crash_handler);
+    signal(SIGILL, crash_handler);
+}
+
 int main(int argc, char *argv[]) {
+    setup_crash_handler();
+    
     gtk_init(&argc, &argv);
     apply_custom_css();
     load_custom_font();

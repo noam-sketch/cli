@@ -38,5 +38,5 @@ make test
 You can generate a standalone Debian installer (`.deb`), complete with `.desktop` shortcuts and icons.
 ```bash
 ./build_deb.sh
-sudo dpkg -i cli_1.0.0_amd64.deb
+sudo dpkg -i cli_1.0.1_amd64.deb
 ```
